@@ -132,23 +132,43 @@ panic(char *s)
 #define CRTPORT 0x3d4
 static ushort *crt = (ushort*)P2V(0xb8000);  // CGA memory
 
-static void
-cgaputc(int c)
-{
-  int pos;
 
+int
+get_cursor() {
+  int pos;
   // Cursor position: col + 80*row.
   outb(CRTPORT, 14);
   pos = inb(CRTPORT+1) << 8;
   outb(CRTPORT, 15);
   pos |= inb(CRTPORT+1);
 
+  return pos;
+}
+
+void
+set_cursor(int pos) {
+  outb(CRTPORT, 14);
+  outb(CRTPORT+1, pos>>8);
+  outb(CRTPORT, 15);
+  outb(CRTPORT+1, pos);
+}
+
+static void
+cgaputc(int c)
+{
+  int pos = get_cursor();
+
   if(c == '\n')
     pos += 80 - pos%80;
   else if(c == BACKSPACE){
     if(pos > 0) --pos;
-  } else
-    crt[pos++] = (c&0xff) | 0x0700;  // black on white
+  } else if(c == LEFT_KEY){
+    if(pos > 0) --pos;
+  } else if(c == RIGHT_KEY){
+    if(pos < 25*80) ++pos;
+  }
+  else
+    crt[pos++] = (c & 0xff) | 0x0700;  // black on white
 
   if(pos < 0 || pos > 25*80)
     panic("pos under/overflow");
@@ -159,11 +179,7 @@ cgaputc(int c)
     memset(crt+pos, 0, sizeof(crt[0])*(24*80 - pos));
   }
 
-  outb(CRTPORT, 14);
-  outb(CRTPORT+1, pos>>8);
-  outb(CRTPORT, 15);
-  outb(CRTPORT+1, pos);
-  crt[pos] = ' ' | 0x0700;
+  set_cursor(pos);
 }
 
 void
@@ -182,6 +198,11 @@ consputc(int c)
   cgaputc(c);
 }
 
+void console_shift(int len) {
+  int cga_pos = get_cursor();
+  memmove(crt+cga_pos+1, crt+cga_pos, len);
+}
+
 #define INPUT_BUF 128
 struct {
   char buf[INPUT_BUF];
@@ -191,6 +212,15 @@ struct {
 } input;
 
 #define C(x)  ((x)-'@')  // Control-x
+
+void
+flush_buf(uint index) {
+  char c = input.buf[index++ % INPUT_BUF];
+  do {
+    consputc(c);
+    c = input.buf[index++ % INPUT_BUF];
+  } while(c);
+}
 
 void
 consoleintr(int (*getc)(void))
@@ -217,11 +247,32 @@ consoleintr(int (*getc)(void))
         consputc(BACKSPACE);
       }
       break;
+    case LEFT_KEY:
+      if(input.e != input.w){
+        input.e--;
+      }
+      consputc(c);
+      break;
+    case RIGHT_KEY:
+      if(input.e != input.w && input.buf[input.e+1 % INPUT_BUF] != '\x00'){
+        input.e++;
+      }
+      consputc(c);
+      break;
     default:
       if(c != 0 && input.e-input.r < INPUT_BUF){
         c = (c == '\r') ? '\n' : c;
-        input.buf[input.e++ % INPUT_BUF] = c;
+        
+        // if char exists in current index, slide buffer to the right
+        if (input.buf[input.e % INPUT_BUF] != '\x00') {
+          int shift_len = strlen(input.buf + input.e);
+          memmove(input.buf+input.e+1, input.buf+input.e, shift_len);
+          console_shift(shift_len);
+        }
+
+        input.buf[input.e % INPUT_BUF] = c;
         consputc(c);
+        input.e++;
         if(c == '\n' || c == C('D') || input.e == input.r+INPUT_BUF){
           input.w = input.e;
           wakeup(&input.r);
