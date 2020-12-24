@@ -125,6 +125,10 @@ panic(char *s)
 
 //PAGEBREAK: 50
 #define BACKSPACE 0x100
+#define UP_KEY 0xe2
+#define DOWN_KEY 0xe3
+#define LEFT_KEY 0xe4
+#define RIGHT_KEY 0xe5
 #define CRTPORT 0x3d4
 static ushort *crt = (ushort*)P2V(0xb8000);  // CGA memory
 
